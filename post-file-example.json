@@ -1,0 +1,21 @@
+{
+    "files_count": 1,
+    "files": [
+        {
+            "isMain": true,
+            "read_only": false,
+            "isCloseable": false,
+            "file_name": "Main.java",
+            "language": "java",
+            "content": "import java.util.Scanner;\r\n\r\npublic class Main{\r\n    public static void main(String[] args){\r\n        Scanner in = new Scanner(System.in);\r\n\r\n        System.out.print(\"Enter a number between 1 and 7: \");\r\n        int x = in.nextInt();\r\n\r\n        if(x == 1){\r\n            System.out.println(\"Monday\");\r\n        }\r\n        else if(x == 2){\r\n            System.out.println(\"Tuesday\");\r\n        }\r\n        else if(x == 3){\r\n            System.out.println(\"Wednesday\");\r\n        }\r\n        else if(x == 4){\r\n            System.out.println(\"Thursday\");\r\n        }\r\n        else if(x == 5){\r\n            System.out.println(\"Friday\");\r\n        }\r\n        else if(x == 6){\r\n            System.out.println(\"Saturday\");\r\n        }\r\n        else if(x == 7){\r\n            System.out.println(\"Sunday\");\r\n        }\r\n        else {\r\n            System.out.println(\"Invalid input.\");\r\n        }\r\n    }\r\n}"
+        },
+        {
+            "isMain": true,
+            "read_only": false,
+            "isCloseable": false,
+            "file_name": "SecondFile.java",
+            "language": "java",
+            "content": "//Hello World"
+        }
+    ]
+}
