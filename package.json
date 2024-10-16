@@ -10,9 +10,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@radix-ui/react-visually-hidden": "^1.1.0",
     "body-parser": "^1.20.3",
     "cors": "^2.8.5",
     "express": "^4.21.1",
+    "monaco-editor": "^0.52.0",
     "nodemon": "^3.1.7",
     "socket.io": "^4.8.0",
     "ws": "^8.18.0"

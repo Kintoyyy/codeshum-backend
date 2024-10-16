@@ -7,49 +7,44 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 const http = require('http');
 
-const TIMEOUT_LIMIT = 1000;
-
 const app = express();
 const PORT = process.env.PORT || 8000;
-
-app.use(cors({
-    origin: 'http://localhost:3000'
-}));
-
 const sessions = {};
+const codeDir = path.join(__dirname, 'code');
+
+if (!fs.existsSync(codeDir)) {
+    fs.mkdirSync(codeDir);
+}
+
+app.use(cors({ origin: 'http://localhost:3000' }));
+app.use(bodyParser.json());
+
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
 
 function generateSessionId() {
     return '_' + Math.random().toString(36).substr(2, 9);
 }
 
-const codeDir = path.join(__dirname, 'code');
-if (!fs.existsSync(codeDir)) {
-    fs.mkdirSync(codeDir);
-}
-
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
-
-app.use(bodyParser.json());
-
 wss.on('connection', (ws) => {
     console.log('WebSocket connection established');
-
     const sessionId = generateSessionId();
     sessions[sessionId] = { ws };
-
-    ws.send('userId: ' + sessionId);
+    ws.send(JSON.stringify({ userId: sessionId }));
 
     ws.on('message', (message) => {
-        console.log(`Received from client ${sessionId}:`, message);
+        const data = JSON.parse(message);
+        console.log(`Received from client ${sessionId}:`, data);
 
-        if (sessions[sessionId]?.javaProcess) {
-            sessions[sessionId].javaProcess.stdin.write(message + '\n');
+        if (data.type === 'input' && sessions[sessionId]?.javaProcess) {
+            sessions[sessionId].javaProcess.stdin.write(data.command + '\n');
         }
+
     });
 
     ws.on('close', () => {
         console.log(`WebSocket connection closed for session ${sessionId}`);
+        // cleanupSession(sessionId);
 
         if (sessions[sessionId]) {
             console.log(`Cleaning up resources for session ${sessionId}`);
@@ -90,7 +85,6 @@ app.post('/run', async (req, res) => {
     }
 });
 
-
 function createCodeFile(sessionId, fileName, code) {
     const userCodeDir = path.join(codeDir, sessionId);
     if (!fs.existsSync(userCodeDir)) {
@@ -109,17 +103,25 @@ function createCodeFile(sessionId, fileName, code) {
     });
 }
 
-
-function compileJava(sessionId, res, callback) {
+function compileAndRunJava(sessionId, mainFileName, res) {
     const userCodeDir = path.join(codeDir, sessionId);
     exec(`javac ${userCodeDir}/*.java`, (error, stdout, stderr) => {
         if (error) {
-            const errorMessage = stderr.replace(new RegExp(`^${userCodeDir.replace(/\\/g, '\\\\')}\\\\?`, 'gm'), '');
-            broadcast(sessionId, `ERROR:\n${errorMessage.trim()}`);
-            return res.status(500).json({ error: 'Compilation error occurred' });
+            // Extract and clean the error message for better readability
+            const errorMessage = stderr.replace(
+                new RegExp(`^${userCodeDir.replace(/\\/g, '\\\\')}\\\\?`, 'gm'),
+                ''
+            ).trim();
+
+            // Broadcast the error message to the WebSocket client
+            // broadcast(sessionId, { output: `${errorMessage}\n` });
+
+            // Send a 500 response to the API caller with detailed error info
+            return res.status(500).json({ error: errorMessage });
         }
+
         console.log(`Compiled successfully for session ${sessionId}`);
-        callback();
+        runJava(sessionId, mainFileName, res);
     });
 }
 
@@ -127,76 +129,62 @@ function compileJava(sessionId, res, callback) {
 function runJava(sessionId, mainFileName, res) {
     const userCodeDir = path.join(codeDir, sessionId);
     const className = path.basename(mainFileName, '.java');
+    const session = sessions[sessionId];
 
-    sessions[sessionId].javaProcess = spawn('java', ['-cp', userCodeDir, className]);
+    session.javaProcess = spawn('java', ['-cp', userCodeDir, className]);
 
-    // const timeout = setTimeout(() => {
-    //     console.log(`Terminating process for session ${sessionId} due to timeout`);
-    //     sessions[sessionId].javaProcess.kill();
-    //     broadcast(sessionId, 'Infinity loop');
-    // }, TIMEOUT_LIMIT);
+    let isWaitingForInput = false;
 
-    sessions[sessionId].javaProcess.stdout.on('data', (data) => {
-        broadcast(sessionId, data.toString());
-    });
+    // Listen for output from the Java process
+    session.javaProcess.stdout.on('data', (data) => {
+        const output = data.toString();
 
-    sessions[sessionId].javaProcess.stderr.on('data', (data) => {
-        broadcast(sessionId, data.toString());
-    });
-
-    sessions[sessionId].javaProcess.on('close', (code) => {
-        // clearTimeout(timeout);
-        if (code === 0) {
-            broadcast(sessionId, `Code executed successfully`);
+        if (/enter|input|scan|prompt|waiting/i.test(output)) {
+            isWaitingForInput = true;
         } else {
-            broadcast(sessionId, 'Execution failed with an error.');
+            isWaitingForInput = false;
         }
-        delete sessions[sessionId].javaProcess;
+
+        broadcast(sessionId, { output, isWaitingForInput });
     });
 
+    // Listen for errors from the Java process
+    session.javaProcess.stderr.on('data', (data) => {
+        broadcast(sessionId, { output: data.toString() });
+    });
+
+    // Listen for the process to close
+    session.javaProcess.on('close', (code) => {
+        const message = code === 0
+            ? 'Code executed successfully'
+            : 'Execution failed with an error.';
+        broadcast(sessionId, { message });
+
+        // Clean up the process
+        delete session.javaProcess;
+    });
+
+    // Send initial response to the client
     res.json({ message: 'Execution started, check the WebSocket for live output.' });
 }
 
 
-function compileAndRunJava(sessionId, mainFileName, res) {
-    compileJava(sessionId, res, () => {
-        runJava(sessionId, mainFileName, res);
-    });
-}
-
 function broadcast(sessionId, message) {
     if (sessions[sessionId]?.ws) {
-        sessions[sessionId].ws.send(message);
+        console.log(`Broadcasting to session ${sessionId}:`, message);
+        sessions[sessionId].ws.send(JSON.stringify({ message }));
     }
 }
 
-function cleanupSessions() {
-    const currentTime = Date.now();
-    Object.keys(sessions).forEach(sessionId => {
-        const session = sessions[sessionId];
-
-        if (currentTime - session.lastActive > 300000) {
-            console.log(`Cleaning up expired session ${sessionId}`);
-            const userCodeDir = path.join(codeDir, sessionId);
-            if (fs.existsSync(userCodeDir)) {
-                fs.rmSync(userCodeDir, { recursive: true, force: true });
-                console.log(`Deleted files for expired session ${sessionId}`);
-            }
-            delete sessions[sessionId];
-        }
-    });
-}
-
-setInterval(cleanupSessions, 60000);
-
-wss.on('message', (message) => {
-    console.log(`Received from client ${sessionId}:`, message);
-    sessions[sessionId].lastActive = Date.now();
-
-    if (sessions[sessionId]?.javaProcess) {
-        sessions[sessionId].javaProcess.stdin.write(message + '\n');
+function cleanupSession(sessionId) {
+    console.log(`Cleaning up resources for session ${sessionId}`);
+    const userCodeDir = path.join(codeDir, sessionId);
+    if (fs.existsSync(userCodeDir)) {
+        fs.rmSync(userCodeDir, { recursive: true, force: true });
+        console.log(`Deleted files for session ${sessionId}`);
     }
-});
+    delete sessions[sessionId];
+}
 
 server.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
